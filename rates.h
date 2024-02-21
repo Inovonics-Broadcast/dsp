@@ -2,6 +2,7 @@
 
 #ifndef SIGNALSMITH_DSP_RATES_H
 #define SIGNALSMITH_DSP_RATES_H
+#include "xsimd/xsimd.hpp"
 
 #include "./windows.h"
 #include "./delay.h"
@@ -121,11 +122,23 @@ namespace rates {
 			for (int i = 0; i < lowSamples; ++i) {
 				output[2*i] = inputChannel[i + oneWayLatency];
 				Sample *offsetInput = inputChannel + (i + 1);
-				Sample sum = 0;
-				for (int o = 0; o < kernelLength; ++o) {
-					sum += offsetInput[o]*halfSampleKernel[o];
+				using b_type = xsimd::batch<Sample>;
+				b_type sum = 0;
+				std::size_t inc = b_type::size;
+				std::size_t size = kernelLength;
+				// Size for which vectorization is possible
+				std::size_t vec_size = size - size % inc;
+				for (int o = 0; o < size; o += inc) {
+					b_type a = b_type::load_unaligned(&offsetInput[o]);
+					b_type b = b_type::load_unaligned(&halfSampleKernel[o]);
+					sum += (a * b);
 				}
-				output[2*i + 1] = sum;
+				Sample vec_sum = xsimd::reduce_add(sum);
+				// Remaining part that cannot be vectorized
+				for (int o = vec_size; o < size; ++o) {
+					vec_sum += offsetInput[o]*halfSampleKernel[o];
+				}
+				output[2*i + 1] = vec_sum;
 			}
 			// Copy the end of the buffer back to the beginning
 			for (int i = 0; i < kernelLength; ++i) {
