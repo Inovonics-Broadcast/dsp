@@ -152,7 +152,7 @@ namespace signalsmith { namespace fft {
 				if (size%factor == 0) {
 					factors.push_back(factor);
 					size /= factor;
-				} else if (factor > sqrt(size)) {
+				} else if (factor > std::sqrt(size)) {
 					factor = size;
 				} else {
 					++factor;
