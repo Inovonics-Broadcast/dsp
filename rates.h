@@ -114,6 +114,12 @@ namespace rates {
 		/// Upsamples a single-channel input into the internal buffer
 		template<class Data>
 		void upChannel(int c, Data &&data, int lowSamples) {
+			using b_type = xsimd::batch<Sample>;
+			constexpr std::size_t inc = b_type::size;
+			std::size_t size = kernelLength;
+			// Size for which vectorization is possible
+			std::size_t vec_size = size - size % inc;
+
 			Sample *inputChannel = inputBuffer.data() + c*inputStride;
 			for (int i = 0; i < lowSamples; ++i) {
 				inputChannel[kernelLength + i] = data[i];
@@ -122,12 +128,7 @@ namespace rates {
 			for (int i = 0; i < lowSamples; ++i) {
 				output[2*i] = inputChannel[i + oneWayLatency];
 				Sample *offsetInput = inputChannel + (i + 1);
-				using b_type = xsimd::batch<Sample>;
 				b_type sum = 0;
-				std::size_t inc = b_type::size;
-				std::size_t size = kernelLength;
-				// Size for which vectorization is possible
-				std::size_t vec_size = size - size % inc;
 				for (int o = 0; o < size; o += inc) {
 					b_type a = b_type::load_unaligned(&offsetInput[o]);
 					b_type b = b_type::load_unaligned(&halfSampleKernel[o]);
@@ -157,15 +158,30 @@ namespace rates {
 		/// Downsamples a single channel from the internal buffer to a single-channel output
 		template<class Data>
 		void downChannel(int c, Data &&data, int lowSamples) {
+			using b_type = xsimd::batch<Sample>;
+			constexpr std::size_t inc = b_type::size;
+			std::size_t size = kernelLength;
+			// Size for which vectorization is possible
+			std::size_t vec_size = size - size % inc;
+			
 			Sample *input = buffer.data() + c*stride; // no offset for latency
 			for (int i = 0; i < lowSamples; ++i) {
 				Sample v1 = input[2*i + kernelLength];
-				Sample sum = 0;
-				for (int o = 0; o < kernelLength; ++o) {
-					Sample v2 = input[2*(i + o) + 1];
-					sum += v2*halfSampleKernel[o];
+				b_type sum = 0;
+				for (std::size_t o = 0; o < vec_size; o += inc) {
+					Sample oddSamples[inc];
+					for (std::size_t j = 0; j < inc; ++j) {
+						oddSamples[j] = input[2*(i + o + j) + 1];
+					}
+					b_type a = b_type::load_unaligned(oddSamples);
+					b_type b = b_type::load_unaligned(&halfSampleKernel[o]);
+					sum += (a * b);
 				}
-				Sample v2 = sum;
+				Sample v2 = xsimd::reduce_add(sum);
+				// Remaining part that cannot be vectorized
+				for (std::size_t o = vec_size; o < size; ++o) {
+					v2 += input[2*(i + o) + 1]*halfSampleKernel[o];
+				}
 				Sample v = (v1 + v2)*Sample(0.5);
 				data[i] = v;
 			}
